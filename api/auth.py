@@ -3,6 +3,26 @@ from . import config
 from .exceptions import AuthError, NetworkError
 
 
+def _format_oidc_error(response: requests.Response, default_message: str) -> str:
+    parts = [f"{default_message} (HTTP {response.status_code})"]
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        description = payload.get("error_description")
+        if error:
+            parts.append(f"error={error}")
+        if description:
+            parts.append(f"description={description}")
+    elif response.text:
+        parts.append(response.text[:300])
+
+    return ": ".join(parts)
+
+
 def password_grant(email: str, password: str):
     data = {
         "client_id": "app-x-ios",
@@ -16,7 +36,7 @@ def password_grant(email: str, password: str):
         raise NetworkError(str(e)) from e
 
     if r.status_code != 200:
-        raise AuthError("Invalid credentials")
+        raise AuthError(_format_oidc_error(r, "Authentication failed"))
 
     j = r.json()
     return j["access_token"], j["refresh_token"]
@@ -30,5 +50,5 @@ def refresh_grant(refresh_token: str) -> str:
     }
     r = requests.post(config.OIDC_TOKEN_URL, data=data, timeout=10)
     if r.status_code != 200:
-        raise AuthError("Refresh failed")
+        raise AuthError(_format_oidc_error(r, "Refresh failed"))
     return r.json()["access_token"]
