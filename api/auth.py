@@ -2,7 +2,7 @@ import requests
 from . import config
 from .exceptions import AuthError, NetworkError
 
-# Keep raw response excerpts short to avoid noisy exceptions and accidental large payload leaks.
+# Keep excerpts short (300 chars) so auth errors stay readable in logs and avoid large payload leakage.
 MAX_ERROR_TEXT_LENGTH = 300
 
 
