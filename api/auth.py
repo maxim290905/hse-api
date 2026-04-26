@@ -38,7 +38,12 @@ def _format_oidc_error(response: requests.Response, default_message: str) -> str
     elif response.text:
         raw = response.text
         compact = _compact_text(raw)
-        is_html = "html" in response.headers.get("Content-Type", "").lower() or "<html" in raw.lower()
+        raw_lstripped = raw.lstrip().lower()
+        is_html = (
+            "html" in response.headers.get("Content-Type", "").lower()
+            or raw_lstripped.startswith("<!doctype html")
+            or raw_lstripped.startswith("<html")
+        )
 
         if is_html:
             title_match = HTML_TITLE_RE.search(raw)
