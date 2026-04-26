@@ -12,6 +12,7 @@ from api.models.timetable import Lesson
 
 
 GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,8 +74,94 @@ def google_headers(access_token: str) -> dict[str, str]:
     }
 
 
+class GoogleCalendarAuth:
+    def __init__(
+        self,
+        access_token: str | None,
+        refresh_token: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+    ) -> None:
+        self._access_token = access_token
+        self._refresh_token = refresh_token
+        self._client_id = client_id
+        self._client_secret = client_secret
+
+    @property
+    def can_refresh(self) -> bool:
+        return bool(self._refresh_token and self._client_id and self._client_secret)
+
+    def ensure_access_token(self) -> None:
+        if self._access_token:
+            return
+        if not self.can_refresh:
+            raise RuntimeError(
+                "Нет Google access token, а для обновления нужны GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET"
+            )
+        self.refresh_access_token()
+
+    def refresh_access_token(self) -> None:
+        if not self.can_refresh:
+            raise RuntimeError(
+                "Для автообновления токена нужны GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET"
+            )
+
+        response = requests.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": self._refresh_token,
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+            },
+            timeout=20,
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"Не удалось обновить Google access token: {response.status_code} {response.text}"
+            )
+
+        refreshed_token = response.json().get("access_token")
+        if not refreshed_token:
+            raise RuntimeError("Google token endpoint не вернул access_token")
+        self._access_token = refreshed_token
+
+    def headers(self) -> dict[str, str]:
+        self.ensure_access_token()
+        return google_headers(self._access_token)
+
+
+def google_request(
+    method: str,
+    auth: GoogleCalendarAuth,
+    url: str,
+    *,
+    params: dict | None = None,
+    json: dict | None = None,
+) -> requests.Response:
+    response = requests.request(
+        method,
+        url,
+        headers=auth.headers(),
+        params=params,
+        json=json,
+        timeout=20,
+    )
+    if response.status_code == 401 and auth.can_refresh:
+        auth.refresh_access_token()
+        response = requests.request(
+            method,
+            url,
+            headers=auth.headers(),
+            params=params,
+            json=json,
+            timeout=20,
+        )
+    return response
+
+
 def get_existing_hse_event_ids(
-    access_token: str,
+    auth: GoogleCalendarAuth,
     calendar_id: str,
     time_min: str,
     time_max: str,
@@ -92,11 +179,11 @@ def get_existing_hse_event_ids(
         if page_token:
             params["pageToken"] = page_token
 
-        response = requests.get(
+        response = google_request(
+            "GET",
+            auth,
             google_events_url(calendar_id),
-            headers=google_headers(access_token),
             params=params,
-            timeout=20,
         )
         if not response.ok:
             raise RuntimeError(
@@ -157,7 +244,7 @@ def build_event(lesson: Lesson, timezone: str) -> dict:
 
 
 def insert_events(
-    access_token: str,
+    auth: GoogleCalendarAuth,
     calendar_id: str,
     events: Iterable[dict],
     dry_run: bool,
@@ -171,11 +258,11 @@ def insert_events(
             created += 1
             continue
 
-        response = requests.post(
+        response = google_request(
+            "POST",
+            auth,
             google_events_url(calendar_id),
-            headers=google_headers(access_token),
             json=event,
-            timeout=20,
         )
         if not response.ok:
             raise RuntimeError(
@@ -195,10 +282,22 @@ def main() -> None:
     email = os.environ.get("email")
     password = os.environ.get("password")
     google_access_token = os.environ.get("GOOGLE_ACCESS_TOKEN")
+    google_refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
+    google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
+    google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
     if not email or not password:
         raise RuntimeError("В .env должны быть заданы email и password")
-    if not google_access_token:
-        raise RuntimeError("В .env должна быть задана переменная GOOGLE_ACCESS_TOKEN")
+    if not google_access_token and not google_refresh_token:
+        raise RuntimeError(
+            "В .env должна быть задана GOOGLE_ACCESS_TOKEN или связка GOOGLE_REFRESH_TOKEN + GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET"
+        )
+
+    auth = GoogleCalendarAuth(
+        access_token=google_access_token,
+        refresh_token=google_refresh_token,
+        client_id=google_client_id,
+        client_secret=google_client_secret,
+    )
 
     start_date = parse_start_date(args.start_date)
     lessons = collect_lessons(Account.auth(email, password), start_date, args.days)
@@ -211,7 +310,7 @@ def main() -> None:
     period_end = max(lesson.date_end for lesson in lessons).isoformat()
 
     existing_event_ids = get_existing_hse_event_ids(
-        google_access_token,
+        auth,
         args.calendar_id,
         period_start,
         period_end,
@@ -224,7 +323,7 @@ def main() -> None:
 
     events = [build_event(lesson, args.timezone) for lesson in new_lessons]
     created = insert_events(
-        google_access_token,
+        auth,
         args.calendar_id,
         events,
         args.dry_run,

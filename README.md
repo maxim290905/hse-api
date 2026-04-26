@@ -416,6 +416,10 @@ python test_all_models.py
 email=ваш_email@edu.hse.ru
 password=ваш_пароль
 GOOGLE_ACCESS_TOKEN=ваш_google_oauth_access_token
+# Опционально для автообновления access token:
+GOOGLE_REFRESH_TOKEN=ваш_google_oauth_refresh_token
+GOOGLE_CLIENT_ID=ваш_google_oauth_client_id
+GOOGLE_CLIENT_SECRET=ваш_google_oauth_client_secret
 ```
 
 2. Запустите синхронизацию:
@@ -423,6 +427,8 @@ GOOGLE_ACCESS_TOKEN=ваш_google_oauth_access_token
 ```bash
 python hse_to_google_calendar.py --days 14 --calendar-id primary
 ```
+
+Если указан `GOOGLE_REFRESH_TOKEN` вместе с `GOOGLE_CLIENT_ID` и `GOOGLE_CLIENT_SECRET`, скрипт автоматически обновит `GOOGLE_ACCESS_TOKEN` при 401 от Google Calendar API.
 
 Полезные параметры:
 - `--start-date YYYY-MM-DD` — дата начала периода
