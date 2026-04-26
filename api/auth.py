@@ -2,6 +2,8 @@ import requests
 from . import config
 from .exceptions import AuthError, NetworkError
 
+MAX_ERROR_TEXT_LENGTH = 300
+
 
 def _format_oidc_error(response: requests.Response, default_message: str) -> str:
     parts = [f"{default_message} (HTTP {response.status_code})"]
@@ -18,7 +20,7 @@ def _format_oidc_error(response: requests.Response, default_message: str) -> str
         if description:
             parts.append(f"description={description}")
     elif response.text:
-        parts.append(response.text[:300])
+        parts.append(response.text[:MAX_ERROR_TEXT_LENGTH])
 
     return ": ".join(parts)
 
