@@ -2,6 +2,7 @@ import requests
 from . import config
 from .exceptions import AuthError, NetworkError
 
+# Keep raw response excerpts short to avoid noisy exceptions and accidental large payload leaks.
 MAX_ERROR_TEXT_LENGTH = 300
 
 
@@ -20,7 +21,10 @@ def _format_oidc_error(response: requests.Response, default_message: str) -> str
         if description:
             parts.append(f"description={description}")
     elif response.text:
-        parts.append(response.text[:MAX_ERROR_TEXT_LENGTH])
+        text = response.text
+        if len(text) > MAX_ERROR_TEXT_LENGTH:
+            text = f"{text[:MAX_ERROR_TEXT_LENGTH]}..."
+        parts.append(text)
 
     return ": ".join(parts)
 
