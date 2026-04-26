@@ -42,7 +42,7 @@ def _format_oidc_error(response: requests.Response, default_message: str) -> str
 
         if is_html:
             title_match = HTML_TITLE_RE.search(raw)
-            support_match = SUPPORT_ID_RE.search(compact)
+            support_match = SUPPORT_ID_RE.search(raw) or SUPPORT_ID_RE.search(compact)
             if title_match:
                 parts.append(f"title={_truncate(title_match.group(1).strip())}")
             if support_match:
