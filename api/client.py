@@ -8,11 +8,13 @@ from .endpoints.food import FoodAPI
 
 
 class Account:
-    def __init__(self, email: str, access_token: str, refresh_token: str):
+    def __init__(self, email: str, access_token: str, refresh_token: Optional[str]):
         self.email = email
         self._refresh_token = refresh_token
 
         def _refresh():
+            if not self._refresh_token:
+                raise AuthError("Token refresh is not available for current session")
             new_access = refresh_grant(self._refresh_token)
             return new_access
 

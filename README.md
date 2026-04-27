@@ -43,6 +43,10 @@ pip3 install -r requirements.txt
 ```env
 email=ваш_email@edu.hse.ru
 password=ваш_пароль
+# Опционально: переопределение OIDC параметров
+# OIDC_CLIENT_ID=elk
+# OIDC_REDIRECT_URI=https://lk.hse.ru/api/keycloak-auth/
+# OIDC_SCOPE=openid
 ```
 
 ### 2. Авторизация
@@ -415,6 +419,10 @@ python test_all_models.py
 ```env
 email=ваш_email@edu.hse.ru
 password=ваш_пароль
+# Опционально: OIDC параметры
+# OIDC_CLIENT_ID=elk
+# OIDC_REDIRECT_URI=https://lk.hse.ru/api/keycloak-auth/
+# OIDC_SCOPE=openid
 GOOGLE_ACCESS_TOKEN=ваш_google_oauth_access_token
 # Опционально для автообновления access token:
 GOOGLE_REFRESH_TOKEN=ваш_google_oauth_refresh_token
@@ -484,9 +492,11 @@ hse-api/
 
 ### Авторизация
 
-Библиотека использует OAuth 2.0 (OIDC) для авторизации через `password grant` flow. После успешной авторизации:
+Библиотека использует OAuth 2.0 / OpenID Connect через Authorization Code flow:
+- Получение authorization code через `/openid-connect/auth` с логином формой Keycloak
+- Обмен authorization code на токены через `/openid-connect/token`
 - Access token используется для API запросов
-- Refresh token автоматически обновляет access token при истечении срока действия
+- Refresh token (если выдан сервером) автоматически обновляет access token при истечении срока действия
 
 ### HTTP клиент
 

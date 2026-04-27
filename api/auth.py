@@ -1,5 +1,12 @@
-import requests
+import base64
+import hashlib
+import os
 import re
+import secrets
+from urllib.parse import parse_qs, urljoin, urlparse
+
+import requests
+
 from . import config
 from .exceptions import AuthError, NetworkError
 
@@ -7,6 +14,10 @@ from .exceptions import AuthError, NetworkError
 MAX_ERROR_TEXT_LENGTH = 300
 HTML_TITLE_RE = re.compile(r"<title>\s*(.*?)\s*</title>", re.IGNORECASE | re.DOTALL)
 SUPPORT_ID_RE = re.compile(r"support\s*id:\s*([A-Za-z0-9\-]+)", re.IGNORECASE)
+FORM_ACTION_RE = re.compile(
+    r'<form[^>]+id=["\']kc-form-login["\'][^>]*action=["\']([^"\']+)["\']',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _truncate(text: str) -> str:
@@ -60,28 +71,125 @@ def _format_oidc_error(response: requests.Response, default_message: str) -> str
     return ": ".join(parts)
 
 
-def password_grant(email: str, password: str):
-    data = {
-        "client_id": "app-x-ios",
+def _extract_auth_code_from_url(url: str) -> str | None:
+    query = parse_qs(urlparse(url).query)
+    code_values = query.get("code")
+    if code_values:
+        return code_values[0]
+    return None
+
+
+def _generate_pkce() -> tuple[str, str]:
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode("utf-8")).digest()
+    ).decode("utf-8").rstrip("=")
+    return code_verifier, code_challenge
+
+
+def _follow_redirects_until_code(
+    session: requests.Session, response: requests.Response, max_hops: int = 10
+) -> str | None:
+    current = response
+    code = _extract_auth_code_from_url(current.url)
+    if code:
+        return code
+
+    for _ in range(max_hops):
+        location = current.headers.get("Location")
+        if not location:
+            return None
+        next_url = urljoin(current.url, location)
+        code = _extract_auth_code_from_url(next_url)
+        if code:
+            return code
+        try:
+            current = session.get(next_url, allow_redirects=False, timeout=10)
+        except requests.RequestException as e:
+            raise NetworkError(str(e)) from e
+    return None
+
+
+def _authorization_code_grant(email: str, password: str):
+    client_id = os.getenv("OIDC_CLIENT_ID", config.OIDC_AUTH_CLIENT_ID)
+    redirect_uri = os.getenv("OIDC_REDIRECT_URI", config.OIDC_AUTH_REDIRECT_URI)
+    scope = os.getenv("OIDC_SCOPE", config.OIDC_AUTH_SCOPE)
+    code_verifier, code_challenge = _generate_pkce()
+
+    session = requests.Session()
+    auth_params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": scope,
+        "code_challenge_method": "S256",
+        "code_challenge": code_challenge,
+    }
+
+    login_data = {
         "username": email,
         "password": password,
-        "grant_type": "password",
+        "credentialId": "",
     }
+
     try:
-        r = requests.post(config.OIDC_TOKEN_URL, data=data, timeout=10)
+        auth_page = session.get(
+            config.OIDC_AUTH_URL, params=auth_params, allow_redirects=True, timeout=10
+        )
     except requests.RequestException as e:
         raise NetworkError(str(e)) from e
 
-    if r.status_code != 200:
-        raise AuthError(_format_oidc_error(r, "Authentication failed"))
+    login_form = FORM_ACTION_RE.search(auth_page.text or "")
+    if not login_form:
+        code = _extract_auth_code_from_url(auth_page.url)
+        if not code:
+            raise AuthError(_format_oidc_error(auth_page, "Authentication form not found"))
+    else:
+        form_action_url = urljoin(auth_page.url, login_form.group(1))
+        try:
+            login_response = session.post(
+                form_action_url, data=login_data, allow_redirects=False, timeout=10
+            )
+        except requests.RequestException as e:
+            raise NetworkError(str(e)) from e
 
-    j = r.json()
-    return j["access_token"], j["refresh_token"]
+        code = _follow_redirects_until_code(session, login_response)
+        if not code:
+            if login_response.status_code in (401, 403):
+                raise AuthError("Authentication failed: invalid credentials")
+            raise AuthError(_format_oidc_error(login_response, "Authentication failed"))
+
+    token_data = {
+        "client_id": client_id,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "code_verifier": code_verifier,
+    }
+    try:
+        token_response = session.post(config.OIDC_TOKEN_URL, data=token_data, timeout=10)
+    except requests.RequestException as e:
+        raise NetworkError(str(e)) from e
+
+    if token_response.status_code != 200:
+        raise AuthError(_format_oidc_error(token_response, "Token exchange failed"))
+
+    token_json = token_response.json()
+    access_token = token_json.get("access_token")
+    refresh_token = token_json.get("refresh_token")
+    if not access_token:
+        raise AuthError("Token exchange failed: missing access_token")
+    return access_token, refresh_token
+
+
+def password_grant(email: str, password: str):
+    return _authorization_code_grant(email, password)
 
 
 def refresh_grant(refresh_token: str) -> str:
+    client_id = os.getenv("OIDC_CLIENT_ID", config.OIDC_AUTH_CLIENT_ID)
     data = {
-        "client_id": "app-x-ios",
+        "client_id": client_id,
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
     }
