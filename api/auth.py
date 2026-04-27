@@ -91,8 +91,6 @@ def _extract_auth_code_from_url(url: str) -> str | None:
 
 def _generate_pkce() -> tuple[str, str]:
     code_verifier = secrets.token_urlsafe(64)
-    if not 43 <= len(code_verifier) <= 128:
-        raise AuthError("PKCE code verifier length is out of RFC 7636 bounds")
     code_challenge = base64.urlsafe_b64encode(
         hashlib.sha256(code_verifier.encode("utf-8")).digest()
     ).decode("utf-8").rstrip("=")
@@ -161,7 +159,9 @@ def _authorization_code_grant(email: str, password: str):
     if not login_form_action:
         code = _extract_auth_code_from_url(auth_page.url)
         if not code:
-            raise AuthError(_format_oidc_error(auth_page, "Authentication form not found"))
+            raise AuthError(
+                _format_oidc_error(auth_page, "Login form not found and no auth code received")
+            )
     else:
         form_action_url = urljoin(auth_page.url, login_form_action)
         try:
