@@ -13,7 +13,7 @@ from .exceptions import AuthError, NetworkError
 
 # Keep excerpts short (300 chars) so auth errors stay readable in logs and avoid large payload leakage.
 MAX_ERROR_TEXT_LENGTH = 300
-HTML_TITLE_RE = re.compile(r"<title>\s*(.*?)\s*</title>", re.IGNORECASE | re.DOTALL)
+HTML_TITLE_RE = re.compile(r"<title>\s*([^<]{0,512})\s*</title>", re.IGNORECASE)
 SUPPORT_ID_RE = re.compile(r"support\s*id:\s*([A-Za-z0-9\-]+)", re.IGNORECASE)
 
 
