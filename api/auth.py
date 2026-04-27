@@ -88,7 +88,7 @@ def _generate_pkce() -> tuple[str, str]:
 
 
 def _follow_redirects_until_code(
-    session: requests.Session, response: requests.Response, max_hops: int = 10
+    session: requests.Session, response: requests.Response, max_hops: int = 5
 ) -> str | None:
     current = response
     code = _extract_auth_code_from_url(current.url)
