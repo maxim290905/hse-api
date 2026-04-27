@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import secrets
+from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
@@ -14,10 +15,19 @@ from .exceptions import AuthError, NetworkError
 MAX_ERROR_TEXT_LENGTH = 300
 HTML_TITLE_RE = re.compile(r"<title>\s*(.*?)\s*</title>", re.IGNORECASE | re.DOTALL)
 SUPPORT_ID_RE = re.compile(r"support\s*id:\s*([A-Za-z0-9\-]+)", re.IGNORECASE)
-FORM_ACTION_RE = re.compile(
-    r'<form[^>]+id=["\']kc-form-login["\'][^>]*action=["\']([^"\']+)["\']',
-    re.IGNORECASE | re.DOTALL,
-)
+
+
+class _LoginFormParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.action = None
+
+    def handle_starttag(self, tag, attrs):
+        if self.action or tag.lower() != "form":
+            return
+        attrs_dict = dict(attrs)
+        if attrs_dict.get("id") == "kc-form-login" and attrs_dict.get("action"):
+            self.action = attrs_dict["action"]
 
 
 def _truncate(text: str) -> str:
@@ -81,10 +91,18 @@ def _extract_auth_code_from_url(url: str) -> str | None:
 
 def _generate_pkce() -> tuple[str, str]:
     code_verifier = secrets.token_urlsafe(64)
+    if not 43 <= len(code_verifier) <= 128:
+        raise AuthError("PKCE code verifier length is out of RFC 7636 bounds")
     code_challenge = base64.urlsafe_b64encode(
         hashlib.sha256(code_verifier.encode("utf-8")).digest()
     ).decode("utf-8").rstrip("=")
     return code_verifier, code_challenge
+
+
+def _extract_login_form_action(html: str) -> str | None:
+    parser = _LoginFormParser()
+    parser.feed(html)
+    return parser.action
 
 
 def _follow_redirects_until_code(
@@ -139,13 +157,13 @@ def _authorization_code_grant(email: str, password: str):
     except requests.RequestException as e:
         raise NetworkError(str(e)) from e
 
-    login_form = FORM_ACTION_RE.search(auth_page.text or "")
-    if not login_form:
+    login_form_action = _extract_login_form_action(auth_page.text or "")
+    if not login_form_action:
         code = _extract_auth_code_from_url(auth_page.url)
         if not code:
             raise AuthError(_format_oidc_error(auth_page, "Authentication form not found"))
     else:
-        form_action_url = urljoin(auth_page.url, login_form.group(1))
+        form_action_url = urljoin(auth_page.url, login_form_action)
         try:
             login_response = session.post(
                 form_action_url, data=login_data, allow_redirects=False, timeout=10
